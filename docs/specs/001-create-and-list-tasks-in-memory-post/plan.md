@@ -10,6 +10,7 @@ tasks:
     covers: [AC-001.1, AC-001.2, AC-001.3, AC-001.5, AC-001.7, AC-001.8, AC-001.9, AC-001.14, AC-001.15, AC-001.17]
     parallel_safe: true
     depends_on: []
+    done: true
   - id: t2
     title: Add thread-safe in-memory TaskStore
     files: [src/task_api/tasks/store.py, tests/test_unit_task_store.py]
