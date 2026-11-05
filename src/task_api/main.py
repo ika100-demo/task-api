@@ -5,12 +5,16 @@ from __future__ import annotations
 import os
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
 
+from .errors import validation_exception_handler
 from .logging_config import configure_logging
 from .metrics import MetricsMiddleware
+from .tasks.router import router
+from .tasks.store import TaskStore
 from .tracing import configure_tracing, tracing_enabled
 
 configure_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
@@ -18,7 +22,13 @@ if tracing_enabled():
     configure_tracing()
 
 app = FastAPI(title="task-api", version="0.1.0")
+app.state.task_store = TaskStore()
 app.add_middleware(MetricsMiddleware)
+app.include_router(router)
+app.add_exception_handler(
+    RequestValidationError,
+    validation_exception_handler,  # type: ignore[arg-type]
+)
 
 
 class HealthResponse(BaseModel):
