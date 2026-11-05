@@ -9,6 +9,14 @@ Configuration is read exclusively from environment variables. Defaults below are
 | `PORT` | `8080` | HTTP port the service listens on. |
 | `LOG_LEVEL` | `INFO` | Logging level. One of `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
 
+## Database
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | _(unset)_ | PostgreSQL connection URL for the task store; set by the gitops-app from the postgres resource. Unset: `/ready` returns 503 and the task routes return 503. libpq also reads `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` for parts missing from the URL. |
+
+Fixed timeouts (not configurable): connect 2 s, pool checkout 2 s, statement 2 s, `/ready` checkout 1 s.
+
 ## Observability
 
 | Variable | Default | Description |
