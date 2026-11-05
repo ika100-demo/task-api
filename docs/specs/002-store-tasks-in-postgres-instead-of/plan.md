@@ -10,6 +10,7 @@ tasks:
     covers: [AC-002.1, AC-002.2, AC-002.3, AC-002.4, AC-002.5, AC-002.6, AC-002.11, AC-002.12, AC-002.13, AC-002.14]
     parallel_safe: true
     depends_on: []
+    done: true
   - id: t2
     title: Map store failures to 503, readiness via SELECT 1, app factory and env docs
     files: [src/task_api/errors.py, src/task_api/tasks/router.py, src/task_api/main.py, docs/env-vars.md]
