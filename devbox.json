@@ -32,7 +32,8 @@
       "deps-bump":    "bash scripts/deps.sh bump",
       "ci":             "devbox run quality && devbox run test && devbox run security && if grep -qs '\"ci-extra\"[[:space:]]*:' devbox.json; then devbox run ci-extra; fi",
       "image-build":    "docker build -t task-api:scan .",
-      "image-scan":     "trivy image --severity CRITICAL,HIGH --format table task-api:scan"
+      "image-scan":     "trivy image --severity CRITICAL,HIGH --format table task-api:scan",
+      "image-smoke":    "bash scripts/image-smoke.sh"
     }
   }
 }
