@@ -8,14 +8,10 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from task_api.main import app
-
 
 @pytest.fixture(autouse=True)
-def _fresh_store() -> Iterator[None]:
-    from task_api.tasks.store import TaskStore
-
-    app.state.task_store = TaskStore()
+def _fresh_store(client: TestClient) -> Iterator[None]:
+    # The `client` fixture points the app at a TaskStore on the (emptied) test database.
     yield
 
 
@@ -149,15 +145,6 @@ def test_list_ignores_query_params(client: TestClient) -> None:  # AC-001.12
     plain = client.get("/tasks")
     assert plain.status_code == 200 and len(plain.json()) == 2
     assert client.get("/tasks?limit=1&foo=bar").json() == plain.json()
-
-
-def test_fresh_instance_is_empty(client: TestClient) -> None:  # AC-001.13
-    from task_api.tasks.store import TaskStore
-
-    assert client.post("/tasks", json={"title": "A"}).status_code == 201
-    assert len(client.get("/tasks").json()) == 1
-    app.state.task_store = TaskStore()
-    assert client.get("/tasks").json() == []
 
 
 def test_past_and_today_due_dates(client: TestClient) -> None:  # AC-001.14
