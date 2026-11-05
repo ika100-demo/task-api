@@ -1,7 +1,7 @@
 ---
 spec_id: 001-create-and-list-tasks-in-memory-post
 title: Create and list tasks in memory (POST /tasks, GET /tasks)
-status: approved
+status: building
 priority: P1
 shape: service-python
 parent: ika100-demo/taskboard-gitops:001-create-and-list-tasks
@@ -164,3 +164,4 @@ As a caller of the task API, I want invalid input rejected with an error that na
 - 2026-11-05 created
 - 2026-11-05 amended: answered the three open questions; clarified AC-001.5 (any Unicode whitespace-only title is rejected), AC-001.7 (`""` is rejected, only absent or `null` mean no due date) and AC-001.9 (length counts Unicode code points); no behaviour changed, no ids added or withdrawn
 - 2026-11-05 approved
+- 2026-11-05 building
