@@ -9,7 +9,7 @@ docker run -d --name "$name" --read-only --tmpfs /tmp --user 10001:10001 \
   -e PORT=8080 -p "$port:8080" task-api:scan >/dev/null
 for _ in $(seq 1 30); do curl -fs "localhost:$port/health" >/dev/null 2>&1 && break; sleep 1; done
 echo "health: $(curl -fs localhost:$port/health)"
-echo "ready: $(curl -fs localhost:$port/ready)"
+echo "ready: $(curl -s -w ' [%{http_code}]' localhost:$port/ready) (503 is expected without a database)"
 echo "uid: $(docker exec "$name" id -u)"
 echo "processes: $(docker exec "$name" sh -c 'ls /proc | grep -c "^[0-9]"') (uvicorn cmd: $(docker inspect -f '{{.Config.Cmd}}' "$name"))"
 echo "POST: $(curl -s -w ' [%{http_code}]' -X POST localhost:$port/tasks -H 'content-type: application/json' -d '{"title":"smoke"}')"
