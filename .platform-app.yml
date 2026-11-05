@@ -1,0 +1,3 @@
+# Application repos this service belongs to (read by /instance:promote)
+gitops_apps:
+  - ika100-demo/taskboard-gitops

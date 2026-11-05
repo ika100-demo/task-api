@@ -1,0 +1,14 @@
+# Changes here will be overwritten by Copier; AVOID EDITING MANUALLY
+_src_path: gh:ika100/sdlc-foundry/templates/service-python
+description: Task API for the taskboard system
+docker_registry: ghcr.io/ika100-demo
+github_org: ika100-demo
+module_name: task_api
+needs_database: none
+needs_migrations: false
+needs_observability: true
+owner_team: '@ika100-demo'
+platform_marketplace_ref: main
+port: 8080
+project_name: task-api
+python_version: '3.12'

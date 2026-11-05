@@ -1,0 +1,332 @@
+name: ci
+
+on:
+  push:
+    paths-ignore: ['**.md', 'docs/**', '.claude/**']
+    # other branches get CI from their PR only: a push trigger on them too ran every job twice (sdlc-foundry #104)
+    branches: [main]
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, edited]   # edited: a corrected PR title is checked again
+  workflow_dispatch:
+
+env:
+  PUBLISH: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) }}
+
+# Least privilege by default; jobs that publish packages declare what they need.
+permissions:
+  contents: read
+
+# A newer push to the same pull request cancels the older run (main and tags always run to completion).
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}${{ github.event.action == 'edited' && '-edited' || '' }}   # a title edit never cancels a running build
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  quality:
+    name: quality (ruff + mypy)
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jetify-com/devbox-install-action@8c6a66ed6273138b1915457069de78cb52fe3bd7 # v0.15.0
+        if: runner.environment == 'github-hosted'   # self-hosted runner images ship devbox (docs/self-hosted-runners.md)
+        with:
+          enable-cache: true
+      - run: devbox run quality
+
+  test:
+    name: test (pytest + coverage)
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jetify-com/devbox-install-action@8c6a66ed6273138b1915457069de78cb52fe3bd7 # v0.15.0
+        if: runner.environment == 'github-hosted'   # self-hosted runner images ship devbox (docs/self-hosted-runners.md)
+        with:
+          enable-cache: true
+      - run: devbox run test
+
+  security:
+    name: security (pip-audit + detect-secrets + bandit)
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: jetify-com/devbox-install-action@8c6a66ed6273138b1915457069de78cb52fe3bd7 # v0.15.0
+        if: runner.environment == 'github-hosted'   # self-hosted runner images ship devbox (docs/self-hosted-runners.md)
+        with:
+          enable-cache: true
+      - run: devbox run security
+
+  ci-extra:
+    name: ci-extra
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Is a ci-extra recipe defined?
+        id: recipe
+        run: |
+          if grep -qs '"ci-extra"[[:space:]]*:' devbox.json; then
+            echo "defined=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "defined=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no ci-extra recipe is defined in devbox.json: nothing to run (spec 086)"
+          fi
+      - uses: jetify-com/devbox-install-action@8c6a66ed6273138b1915457069de78cb52fe3bd7 # v0.15.0
+        if: runner.environment == 'github-hosted' && steps.recipe.outputs.defined == 'true'   # self-hosted runner images ship devbox (docs/self-hosted-runners.md)
+        with:
+          enable-cache: true
+      - run: devbox run ci-extra
+        if: steps.recipe.outputs.defined == 'true'
+
+  pr-title:
+    name: pr-title (conventional commits)
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Validate PR title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert)(\(.+\))?!?: .{1,72}$'
+          if ! echo "$PR_TITLE" | grep -qE "$pattern"; then
+            echo "ERROR: PR title does not follow Conventional Commits."
+            echo "  Got:     $PR_TITLE"
+            echo "  Pattern: type(scope): description (≤72 chars)"
+            echo "  Example: feat(api): add /health endpoint"
+            exit 1
+          fi
+          echo "OK: PR title is valid."
+
+  branch-name:
+    name: branch-name (naming convention)
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    steps:
+      - name: Validate branch name
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          pattern='^(feature|fix|chore|docs|refactor|perf|test|release)/.+'
+          if ! echo "$BRANCH" | grep -qE "$pattern"; then
+            echo "WARNING: Branch does not follow naming convention."
+            echo "  Got:      $BRANCH"
+            echo "  Expected: type/slug — e.g. feature/add-health-endpoint"
+            echo "  This warning does not block the PR."
+          else
+            echo "OK: Branch name is valid."
+          fi
+
+  docker:
+    name: docker (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    if: github.ref_type != 'tag'   # spec 106: a release tag re-tags the tested sha image (release-image), it never rebuilds
+    needs: [quality, test]
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        # Each architecture builds natively (no QEMU). Developers on Apple silicon run arm64 k3d/Docker nodes and cannot
+        # pull an amd64-only image ("no match for platform in manifest"), so main/tags publish both; PR builds are amd64 only.
+        # vars.CI_DOCKER_MATRIX (JSON, e.g. '[{"arch":"amd64","runner":"lan-myrepo"}]') replaces the matrix on self-hosted runners
+        include: ${{ fromJSON(vars.CI_DOCKER_MATRIX || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')) && '[{"arch":"amd64","runner":"ubuntu-latest"},{"arch":"arm64","runner":"ubuntu-24.04-arm"}]' || '[{"arch":"amd64","runner":"ubuntu-latest"}]')) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        if: env.PUBLISH == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (and push by digest when publishing)
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=${{ env.PUBLISH }}
+          # the GitHub Actions cache only on GitHub-hosted runners: on self-hosted ones exporting every layer over the
+          # site's uplink costs more than it saves (docs/self-hosted-runners.md)
+          cache-from: ${{ runner.environment == 'github-hosted' && format('type=gha,scope={0}', matrix.arch) || '' }}
+          cache-to: ${{ runner.environment == 'github-hosted' && format('type=gha,mode=max,scope={0}', matrix.arch) || '' }}
+
+      - name: Scan the image for fixable HIGH/CRITICAL vulnerabilities
+        if: env.PUBLISH == 'true'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          # the digest is one architecture's image: resolve it for this runner's platform, not the default (amd64)
+          TRIVY_PLATFORM: linux/${{ matrix.arch }}
+        with:
+          image-ref: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          # releases (v*.*.* tags) are blocked by findings; main builds only report them
+          exit-code: ${{ startsWith(github.ref, 'refs/tags/v') && '1' || '0' }}
+
+      - name: Write the SBOM (CycloneDX)
+        if: env.PUBLISH == 'true'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          # the digest is one architecture's image: resolve it for this runner's platform, not the default (amd64)
+          TRIVY_PLATFORM: linux/${{ matrix.arch }}
+        with:
+          image-ref: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
+          format: cyclonedx
+          output: sbom-${{ matrix.arch }}.cdx.json
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: env.PUBLISH == 'true'
+        with:
+          name: sbom-${{ matrix.arch }}
+          path: sbom-${{ matrix.arch }}.cdx.json
+          retention-days: 90
+
+      - name: Export digest
+        if: env.PUBLISH == 'true'
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: env.PUBLISH == 'true'
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  release-image:
+    name: release-image (re-tag the image main already built and tested)
+    # Spec 106: a v*.*.* tag never rebuilds. It gives the sha-<40> image of the tagged commit its X.Y.Z, X.Y and X tags
+    # (same manifest, same digest), so prod runs what staging tested.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [quality, test]
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+      NO_IMAGE: no published sha-<40> image
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve the tested sha image
+        id: tested
+        run: |
+          src="${IMAGE}:sha-${GITHUB_SHA}"
+          if ! docker buildx imagetools inspect "$src" --raw > manifest.json; then
+            echo "::error::${NO_IMAGE} for ${GITHUB_SHA}: merge to main and wait for its CI before tagging"
+            exit 1
+          fi
+          echo "digest=sha256:$(sha256sum manifest.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Scan the image for fixable HIGH/CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          image-ref: ghcr.io/${{ github.repository }}@${{ steps.tested.outputs.digest }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          # releases are blocked by findings; the scanned image is the one that gets the release tags
+          exit-code: '1'
+
+      - name: Tag the tested image X.Y.Z, X.Y and X
+        env:
+          DIGEST: ${{ steps.tested.outputs.digest }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          docker buildx imagetools create -t "${IMAGE}:${version}" -t "${IMAGE}:${version%.*}" -t "${IMAGE}:${version%%.*}" "${IMAGE}@${DIGEST}"
+
+  docker-publish:
+    name: docker (publish multi-arch manifest)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: docker
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-,format=long
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create the multi-arch manifest
+        working-directory: /tmp/digests
+        run: |
+          # word splitting of the tag/digest lists is intended
+          # shellcheck disable=SC2046
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/${{ github.repository }}@sha256:%s ' *)
+
+  pin-dev:
+    name: pin-dev (ask the gitops-app to pin dev to this build)
+    # Spec 062 / ADR-027: the gitops-app's pin-dev workflow opens a PR pinning dev to sha-<40> and merges it after CI.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: docker-publish
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Dispatch pin-dev to the gitops-app
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+          SERVICE: ${{ github.event.repository.name }}
+        run: |
+          if [ ! -f .platform-app.yml ]; then
+            echo "::notice::no .platform-app.yml: dev is not pinned automatically (link the repo to its gitops-app with /shared:new-service --app, spec 062)"
+            exit 0
+          fi
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::GITOPS_TOKEN is not set, so dev is not pinned automatically. Create a fine-grained token with Contents read and write on the gitops-app repo, then: gh secret set GITOPS_TOKEN -R $GITHUB_REPOSITORY (spec 062)"
+            exit 0
+          fi
+          tag="sha-${GITHUB_SHA}"   # spec 078: the full sha is the pin format
+          sed -n 's/^ *- *\([^ #]*\).*/\1/p' .platform-app.yml | while read -r app; do
+            gh api "repos/$app/dispatches" -f event_type=pin-dev -f "client_payload[service]=$SERVICE" -f "client_payload[tag]=$tag"
+            echo "asked $app to pin dev to $SERVICE:$tag"
+          done

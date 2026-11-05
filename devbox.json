@@ -1,0 +1,38 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
+  "packages": [
+    "python@3.12",
+    "uv@latest",
+    "ruff@0.16.10",
+    "mypy@2.1.0",
+    "pip-audit@2.10.1",
+    "detect-secrets@1.5.0",
+    "trivy@0.74.0",
+    "git@latest",
+    "gh@latest"
+  ],
+  "shell": {
+    "init_hook": ["uv sync --all-extras 2>/dev/null || true"],
+    "scripts": {
+      "test":           "SMOKE_BASE_URL= bash scripts/gate.sh tests test pytest -- uv run python -m pytest tests/ -p scripts.smoke_pytest --cov=task_api --cov-report=term-missing",
+      "test-fast":      "SMOKE_BASE_URL= bash scripts/gate.sh tests test-fast pytest -- uv run python -m pytest tests/ -p scripts.smoke_pytest -q --tb=line",
+      "smoke":          "bash scripts/smoke.sh",
+      "spec-check":     "bash scripts/spec-check.sh",
+      "lint":           "uv run ruff check . && uv run ruff format --check .",
+      "lint-fix":       "uv run ruff check --fix . && uv run ruff format .",
+      "format":         "uv run ruff format .",
+      "typecheck":      "uv run mypy .",
+      "quality":        "devbox run lint && devbox run typecheck",
+      "audit":          "uv run pip-audit",
+      "secrets-scan":   "bash scripts/gate.sh files secrets-scan ':!*.lock' && git ls-files -z ':!*.lock' | xargs -0 detect-secrets-hook --baseline .secrets.baseline.json --exclude-files copier-answers --disable-filter detect_secrets.filters.gibberish.should_exclude_secret",
+      "secrets-baseline": "grep -qs is_line_allowlisted .secrets.baseline.json || detect-secrets scan --exclude-files '\\.lock$' --disable-filter detect_secrets.filters.gibberish.should_exclude_secret > .secrets.baseline.json; detect-secrets scan --baseline .secrets.baseline.json --exclude-files '\\.lock$' --disable-filter detect_secrets.filters.gibberish.should_exclude_secret",
+      "bandit":         "uv run bandit -r src/ -q",
+      "security":       "devbox run audit && devbox run secrets-scan && devbox run bandit",
+      "deps-findings": "bash scripts/deps.sh findings",
+      "deps-bump":    "bash scripts/deps.sh bump",
+      "ci":             "devbox run quality && devbox run test && devbox run security && if grep -qs '\"ci-extra\"[[:space:]]*:' devbox.json; then devbox run ci-extra; fi",
+      "image-build":    "docker build -t task-api:scan .",
+      "image-scan":     "trivy image --severity CRITICAL,HIGH --format table task-api:scan"
+    }
+  }
+}
