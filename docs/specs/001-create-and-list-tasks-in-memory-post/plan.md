@@ -17,6 +17,7 @@ tasks:
     covers: [AC-001.4, AC-001.10, AC-001.11, AC-001.13, AC-001.16]
     parallel_safe: true
     depends_on: []
+    done: true
   - id: t3
     title: Wire POST/GET /tasks router, validation error handler and app store
     files: [src/task_api/tasks/router.py, src/task_api/errors.py, src/task_api/main.py]
